@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from io import BytesIO
+import mimetypes
 from pathlib import PurePosixPath
 from zipfile import BadZipFile, ZipFile
 
@@ -16,9 +17,11 @@ ALLOWED_EXTENSIONS = {
     ".xls", ".xlsx", ".txt", ".csv", ".ppt", ".pptx",
 }
 REQUIRED_COLUMNS = ("PO_Number", "File_Path")
-OPTIONAL_COLUMNS = ("Category", "Description")
+OPTIONAL_COLUMNS = ("SoldToLegalEntity", "CategoryName", "Title", "Description", "ContentRepositoryFileShared")
 DISPLAY_COLUMNS = (
-    "PO_Number", "File_Path", "Category", "Description",
+    "PO_Number", "SoldToLegalEntity", "File_Path", "CategoryName",
+    "Title", "Description", "ContentRepositoryFileShared",
+    "DatatypeCode", "FileName", "UploadedFileContentType",
     "Status", "Message", "Size_KB",
 )
 
@@ -46,7 +49,16 @@ class ValidationReport:
         return total, valid, invalid, int(po_count)
 
     def csv_bytes(self) -> bytes:
-        return self.rows.to_csv(index=False).encode("utf-8-sig")
+        safe = self.rows.copy()
+        for column in safe.columns:
+            if safe[column].dtype == "object":
+                safe[column] = safe[column].map(
+                    lambda value: "'" + value
+                    if isinstance(value, str)
+                    and value.lstrip().startswith(("=", "+", "-", "@"))
+                    else value
+                )
+        return safe.to_csv(index=False).encode("utf-8-sig")
 
 
 def _read_mapping(content: bytes, filename: str) -> pd.DataFrame:
@@ -90,6 +102,8 @@ def _read_mapping(content: bytes, filename: str) -> pd.DataFrame:
             f"Mapping has more than the {MAX_ROWS} supported rows."
         )
 
+    if "CategoryName" not in dataframe and "Category" in dataframe:
+        dataframe["CategoryName"] = dataframe["Category"]
     for column in OPTIONAL_COLUMNS:
         if column not in dataframe:
             dataframe[column] = ""
@@ -97,9 +111,12 @@ def _read_mapping(content: bytes, filename: str) -> pd.DataFrame:
     dataframe = dataframe[columns].fillna("").astype(str)
     for column in columns:
         dataframe[column] = dataframe[column].str.strip()
-    dataframe["Category"] = dataframe["Category"].mask(
-        dataframe["Category"].eq(""), "MISC"
+    dataframe["CategoryName"] = dataframe["CategoryName"].mask(
+        dataframe["CategoryName"].eq(""), "MISC"
     )
+    dataframe["ContentRepositoryFileShared"] = dataframe[
+        "ContentRepositoryFileShared"
+    ].mask(dataframe["ContentRepositoryFileShared"].eq(""), "false")
     return dataframe
 
 
@@ -179,11 +196,21 @@ def validate_bundle(
     for _, item in mapping.iterrows():
         po_number = item["PO_Number"]
         file_path = item["File_Path"]
-        category = item["Category"]
+        legal_entity = item["SoldToLegalEntity"]
+        category = item["CategoryName"]
+        title = item["Title"] or PurePosixPath(file_path).name
         description = item["Description"]
+        shared = item["ContentRepositoryFileShared"].lower()
+        mime_type = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
         messages = []
         size_kb = None
 
+        if len(category) > 30:
+            messages.append("CategoryName must be 30 characters or fewer.")
+        if len(description) > 255:
+            messages.append("Description must be 255 characters or fewer.")
+        if shared not in {"true", "false"}:
+            messages.append("ContentRepositoryFileShared must be true or false.")
         if not po_number:
             messages.append("PO_Number is required.")
         elif "/" in po_number or "\\" in po_number or po_number in (".", ".."):
@@ -216,9 +243,15 @@ def validate_bundle(
         records.append(
             {
                 "PO_Number": po_number,
+                "SoldToLegalEntity": legal_entity,
                 "File_Path": file_path,
-                "Category": category,
+                "CategoryName": category,
+                "Title": title,
                 "Description": description,
+                "ContentRepositoryFileShared": shared,
+                "DatatypeCode": "FILE",
+                "FileName": PurePosixPath(file_path).name,
+                "UploadedFileContentType": mime_type,
                 "Status": "ERROR" if messages else "MATCHED",
                 "Message": " ".join(messages) if messages else "Exact mapping validated.",
                 "Size_KB": size_kb,

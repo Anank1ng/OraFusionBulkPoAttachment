@@ -32,6 +32,42 @@ class MappingValidationTests(unittest.TestCase):
         self.assertEqual(report.summary(), (2, 2, 0, 2))
         self.assertFalse(report.has_errors)
 
+    def test_oracle_attachment_columns_resolve_defaults(self):
+        mapping = make_mapping([
+            {
+                "PO_Number": "100001",
+                "File_Path": "100001/Attachment_A.pdf",
+                "CategoryName": "MISC",
+                "Title": "",
+                "Description": "",
+                "ContentRepositoryFileShared": "",
+            }
+        ])
+        report = validate_bundle(
+            mapping, "mapping.xlsx", make_zip({"100001/Attachment_A.pdf": b"PDF"})
+        )
+        row = report.rows.iloc[0]
+        self.assertEqual(row["CategoryName"], "MISC")
+        self.assertEqual(row["Title"], "Attachment_A.pdf")
+        self.assertEqual(row["DatatypeCode"], "FILE")
+        self.assertEqual(row["UploadedFileContentType"], "application/pdf")
+        self.assertEqual(row["ContentRepositoryFileShared"], "false")
+        self.assertFalse(report.has_errors)
+
+    def test_invalid_shared_flag_is_rejected(self):
+        mapping = make_mapping([
+            {
+                "PO_Number": "100001",
+                "File_Path": "100001/Attachment_A.pdf",
+                "ContentRepositoryFileShared": "maybe",
+            }
+        ])
+        report = validate_bundle(
+            mapping, "mapping.xlsx", make_zip({"100001/Attachment_A.pdf": b"PDF"})
+        )
+        self.assertTrue(report.has_errors)
+        self.assertIn("true or false", report.rows.iloc[0]["Message"])
+
     def test_wrong_po_folder_is_rejected(self):
         mapping = make_mapping([
             {"PO_Number": "100001", "File_Path": "100002/A.pdf"},
