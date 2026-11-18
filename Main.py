@@ -1,8 +1,7 @@
-from io import BytesIO
-
 import pandas as pd
 import streamlit as st
 
+from services.oracle_api import InstanceUrlError, test_connection
 from utils.mapping_validator import MAX_FILES, MAX_FILE_MB, ValidationError, validate_bundle
 from utils.template_builder import build_template
 
@@ -33,14 +32,14 @@ with st.sidebar:
     st.divider()
     st.subheader("Development status")
     st.success("Phase 1: Mapping validator")
-    st.info("Dry-run mode. Oracle Fusion is not connected yet.")
+    st.info("Phase 2: Read-only Oracle connection test is available.")
     st.markdown("**Validation rules**")
     st.write("• Every file belongs to its mapped PO")
     st.write("• Folder name must match PO Number")
     st.write("• Exact, case-sensitive file paths")
     st.write("• Duplicate and unsafe files are rejected")
     st.divider()
-    st.caption("No PO data or attachment is sent to Oracle during this phase.")
+    st.caption("Connection test reads at most one PO. Attachment uploads remain disabled.")
 
 st.title("Bulk Purchase Order Attachment")
 st.write(
@@ -48,7 +47,72 @@ st.write(
     "and catch mistakes before enabling Oracle REST API integration."
 )
 
-upload_tab, guide_tab = st.tabs(["📤 Validate Excel + ZIP", "📘 How it works"])
+connection_tab, upload_tab, guide_tab = st.tabs(
+    ["🔌 Oracle Connection", "📤 Validate Excel + ZIP", "📘 How it works"]
+)
+
+with connection_tab:
+    st.subheader("Oracle Fusion Cloud instance")
+    st.write(
+        "Enter your Oracle Fusion base URL and credentials to test read-only "
+        "access to the Purchase Orders REST API."
+    )
+    st.warning(
+        "Security: do not enter personal or production credentials into a "
+        "publicly accessible deployment. Use an approved private environment "
+        "and a dedicated least-privilege integration account."
+    )
+
+    with st.form("oracle_connection_form"):
+        instance_url = st.text_input(
+            "Instance URL",
+            placeholder="https://example.fa.region.oraclecloud.com",
+            help=(
+                "Use the Oracle Fusion HTTPS base URL only. "
+                "This version accepts subdomains of oraclecloud.com."
+            ),
+        )
+        username = st.text_input(
+            "Oracle Fusion Username",
+            placeholder="Integration account username",
+        )
+        password = st.text_input(
+            "Oracle Fusion Password",
+            type="password",
+            help="Only used for this read-only connection request. Never commit credentials.",
+        )
+        acknowledged = st.checkbox(
+            "I am testing from an approved, access-controlled deployment."
+        )
+        submitted = st.form_submit_button(
+            "🔌 Test Connection (GET only)", use_container_width=True
+        )
+
+    if submitted:
+        if not acknowledged:
+            st.error("Confirm you are using an approved private environment before testing.")
+        else:
+            try:
+                result = test_connection(instance_url, username, password)
+            except InstanceUrlError as exc:
+                st.error(str(exc))
+            else:
+                if result.success:
+                    st.success(result.message)
+                    st.caption(
+                        f"Instance: {result.host} · "
+                        f"Items returned: {result.po_count_in_response} "
+                        "(limit=1, not total PO count)"
+                    )
+                else:
+                    st.error(result.message)
+
+    st.info(
+        "This test performs GET /fscmRestApi/resources/"
+        "11.13.18.05/purchaseOrders?limit=1. "
+        "It does not change any PO or send uploaded documents."
+    )
+
 
 with upload_tab:
     st.subheader("1. Download the mapping template")

@@ -2,9 +2,9 @@
 
 A Streamlit tool for preparing and validating bulk Purchase Order attachment mappings for Oracle Fusion Cloud Procurement.
 
-## Phase 1 status
+## Current status
 
-**Local validation only (dry run).** This version does not connect to Oracle Fusion, create change orders, or upload attachments. Oracle REST API integration is a separate development phase.
+**Phase 1: Local mapping validation** is ready. **Phase 2: Read-only Oracle connection check** is available via the Oracle Connection tab. PO attachment upload, creation of change orders, and submission remain disabled.
 
 ## Features
 
@@ -14,6 +14,7 @@ A Streamlit tool for preparing and validating bulk Purchase Order attachment map
 - Reject missing paths, mismatched PO folders, duplicate mappings, unsupported extensions, unsafe ZIP entries, and oversized files.
 - Preview success/error rows and download an audit-friendly CSV validation report.
 - Download an XLSX mapping template.
+- Enter Oracle Fusion base instance URL, username, and password, then test the read-only Purchase Orders endpoint.
 
 ## Setup
 
@@ -48,9 +49,15 @@ The ZIP must contain the mapped attachment files. Put the spreadsheet in a separ
 
 `python -m unittest discover -s tests -v`
 
+## Oracle connection test
+
+In the **Oracle Connection** tab, enter the HTTPS Oracle Fusion instance base URL (for example, `https://example.fa.region.oraclecloud.com`). This version accepts `*.oraclecloud.com` hosts without custom ports or paths. Use an authorized least-privilege integration account and select **Test Connection**. The app executes `GET /fscmRestApi/resources/11.13.18.05/purchaseOrders?limit=1`, checks the response, and displays a success/error message. It does not store credentials in repository files or application logs. Password widget values may remain in the active Streamlit session until it ends.
+
+**Important:** Do not enter Oracle credentials into a publicly accessible Streamlit Community Cloud deployment. Use organization-approved private hosting, access controls, and secrets management before connecting real credentials. HTTP Basic Authentication is an initial testing option; use the organization's approved authentication pattern for production.
+
 ## Next phase
 
-Oracle integration will require read-only PO verification, explicit Procurement BU disambiguation, role/privilege checks, approved-PO change order handling, upload verification, a separate submit control, retries, and an audit log. Test against an authorized non-production Oracle Fusion environment first.
+Oracle integration will require bulk read-only PO verification, explicit Procurement BU disambiguation, role/privilege checks, approved-PO change order handling, upload verification, a separate submit control, retries, and an audit log. Test against an authorized non-production Oracle Fusion environment first.
 
 ## Security
 
