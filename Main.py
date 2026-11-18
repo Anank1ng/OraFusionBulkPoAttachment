@@ -2,6 +2,12 @@ import pandas as pd
 import streamlit as st
 
 from services.oracle_api import InstanceUrlError, test_connection
+from services.reference_center import (
+    REFERENCE_COLUMNS,
+    ReferenceLookupError,
+    lookup_po_references,
+    parse_po_numbers,
+)
 from utils.mapping_validator import MAX_FILES, MAX_FILE_MB, ValidationError, validate_bundle
 from utils.template_builder import build_template
 
@@ -32,14 +38,14 @@ with st.sidebar:
     st.divider()
     st.subheader("Development status")
     st.success("Phase 1: Mapping validator")
-    st.info("Phase 2: Read-only Oracle connection test is available.")
+    st.info("Phase 2: Read-only Oracle connection and PO Reference Center.")
     st.markdown("**Validation rules**")
     st.write("• Every file belongs to its mapped PO")
     st.write("• Folder name must match PO Number")
     st.write("• Exact, case-sensitive file paths")
     st.write("• Duplicate and unsafe files are rejected")
     st.divider()
-    st.caption("Connection test reads at most one PO. Attachment uploads remain disabled.")
+    st.caption("Read-only PO lookups are available. Attachment uploads remain disabled.")
 
 st.title("Bulk Purchase Order Attachment")
 st.write(
@@ -48,7 +54,7 @@ st.write(
 )
 
 connection_tab, upload_tab, guide_tab = st.tabs(
-    ["🔌 Oracle Connection", "📤 Validate Excel + ZIP", "📘 How it works"]
+    ["🔌 Oracle Reference Center", "📤 Validate Excel + ZIP", "📘 How it works"]
 )
 
 with connection_tab:
@@ -81,12 +87,30 @@ with connection_tab:
             type="password",
             help="Only used for this read-only connection request. Never commit credentials.",
         )
+        st.divider()
+        st.markdown("**Reference Center — PO Number → POHeaderId**")
+        po_numbers_raw = st.text_area(
+            "PO Numbers (up to 20, separated by lines, commas, or semicolons)",
+            placeholder="1005873\n1005874\n1005875",
+            help="The app looks up each PO Number in Oracle. No change orders are created.",
+        )
+        sold_to_filter = st.text_input(
+            "Sold-to Legal Entity (optional, exact match)",
+            placeholder="For example: Vision Operations",
+            help="Use this to disambiguate PO Numbers reused across legal entities.",
+        )
         acknowledged = st.checkbox(
             "I am testing from an approved, access-controlled deployment."
         )
-        submitted = st.form_submit_button(
-            "🔌 Test Connection (GET only)", use_container_width=True
-        )
+        col_test, col_reference = st.columns(2)
+        with col_test:
+            submitted = st.form_submit_button(
+                "🔌 Test Connection (GET)", use_container_width=True
+            )
+        with col_reference:
+            lookup_submitted = st.form_submit_button(
+                "🔎 Resolve PO References (GET)", use_container_width=True
+            )
 
     if submitted:
         if not acknowledged:
@@ -107,10 +131,62 @@ with connection_tab:
                 else:
                     st.error(result.message)
 
+    if lookup_submitted:
+        if not acknowledged:
+            st.error("Use an approved private environment before searching Oracle.")
+        else:
+            try:
+                po_numbers = parse_po_numbers(po_numbers_raw)
+                with st.spinner("Retrieving PO Header IDs from Oracle (read-only)..."):
+                    references = lookup_po_references(
+                        instance_url,
+                        username,
+                        password,
+                        po_numbers,
+                        sold_to_filter,
+                    )
+            except (ReferenceLookupError, InstanceUrlError) as exc:
+                st.error(str(exc))
+            else:
+                frame = pd.DataFrame(references, columns=REFERENCE_COLUMNS)
+                matched = sum(row["LookupStatus"] == "MATCHED" for row in references)
+                unresolved = len(po_numbers) - matched
+                st.metric("POs resolved uniquely", f"{matched} / {len(po_numbers)}")
+                if unresolved:
+                    st.warning(
+                        f"{unresolved} PO Number(s) could not be uniquely resolved. "
+                        "Review errors or specify the Sold-to Legal Entity."
+                    )
+                else:
+                    st.success(
+                        "Each requested PO Number resolved to exactly one POHeaderId."
+                    )
+                st.dataframe(frame, use_container_width=True, hide_index=True)
+
+                def safe_csv_field(value):
+                    if isinstance(value, str) and value.lstrip().startswith(
+                        ("=", "+", "-", "@")
+                    ):
+                        return "'" + value
+                    return value
+
+                csv_frame = frame.apply(lambda col: col.map(safe_csv_field))
+                st.download_button(
+                    "⬇️ Export Reference Center CSV",
+                    data=csv_frame.to_csv(index=False).encode("utf-8-sig"),
+                    file_name="PO_Reference_Center.csv",
+                    mime="text/csv",
+                )
+                st.caption(
+                    "POHeaderId comes from purchaseOrders. "
+                    "The draftPurchaseOrders resource key is not resolved here "
+                    "and must be obtained from Oracle before attachment POST."
+                )
+
     st.info(
-        "This test performs GET /fscmRestApi/resources/"
-        "11.13.18.05/purchaseOrders?limit=1. "
-        "It does not change any PO or send uploaded documents."
+        "Connection check: GET purchaseOrders?limit=1. "
+        "Reference Center: GET purchaseOrders?q=OrderNumber=... "
+        "Neither operation updates PO data, creates change orders, or uploads files."
     )
 
 
@@ -210,8 +286,8 @@ with upload_tab:
             st.divider()
             st.subheader("4. Oracle upload")
             st.info(
-                "Actual PO lookup, attachment upload, and change-order submission "
-                "are intentionally disabled in Phase 1. "
+                "PO Reference Center lookups are available in the first tab. "
+                "Attachment upload and change-order submission remain disabled. "
                 "No Oracle record has been created or modified."
             )
             st.button("Upload to Oracle Fusion", disabled=True)
@@ -267,7 +343,8 @@ with guide_tab:
         "and missing files produce validation errors."
     )
     st.warning(
-        "Phase 1 validates only the mapping and ZIP. "
-        "It does not verify PO existence, supplier, Procurement BU, "
-        "change-order status, or Oracle attachment permissions."
+        "Local ZIP validation does not check Oracle PO existence. "
+        "Use the Reference Center tab to retrieve PO details. "
+        "Draft resource keys, change-order state, and attachment permissions "
+        "still require verification before upload."
     )
