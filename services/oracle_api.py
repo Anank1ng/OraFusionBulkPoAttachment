@@ -62,11 +62,11 @@ def test_connection(instance_url: str, username: str, password: str) -> Connecti
             allow_redirects=False,
             verify=True,
         )
-    except requests.Timeout:
+    except requests.exceptions.Timeout:
         return ConnectionResult(False, "Connection timed out. Check Oracle network access.", host)
-    except requests.SSLError:
+    except requests.exceptions.SSLError:
         return ConnectionResult(False, "TLS certificate verification failed.", host)
-    except requests.RequestException:
+    except requests.exceptions.RequestException:
         return ConnectionResult(False, "Cannot reach Oracle Fusion. Check the URL and network access.", host)
 
     if response.status_code == 401:
